@@ -72,17 +72,17 @@ Revenue data collected through payment gateway:
 
 **Three primary datasets:**
 
-1. **downloads.csv** (14MB)
+1. **downloads.csv**
    - 100,000+ download transaction records
    - Fields: timestamp, user, script, type, ip, time_utc
    - Source: SQL database export from reverse proxy logs
 
-2. **subscriptions.csv** (1.7MB)
+2. **subscriptions.csv**
    - Subscription order records (active + cancelled)
-   - Fields: Status, Customer email, Order notes (contains Memberstack email), Total revenue, Created at, Cancellation date, Line title (tier)
+   - Fields: Status, Customer email, Order notes (contains Memberstack email), Total revenue generated (USD), Created at, Line variant price
    - Source: Shopify/Appstle export
 
-3. **memberstack.csv** (2.9MB)
+3. **memberstack.csv**
    - User account information
    - Fields: email address, username, plan_id, date_created
    - Source: Memberstack API export
@@ -96,11 +96,11 @@ Revenue data collected through payment gateway:
 
 ### Step 1: SQL Data Extraction
 
-Original download data stored in SQL database on VPS server (`root@45.77.114.128:/root/reverseproxy/downloads.db`).
+Original download data stored in SQL database on VPS server (`root@XX.XX.XXX.XXX:/root/reverseproxy/downloads.db`).
 
 Extraction performed via SSH:
 ```bash
-ssh root@45.77.114.128
+ssh root@XXX.XX.XXX.XXX
 sqlite3 /root/reverseproxy/downloads.db
 .mode csv
 .output downloads_export.csv
@@ -108,7 +108,7 @@ SELECT * FROM downloads WHERE type IN ('PAID DOWNLOAD', 'FREE DOWNLOAD');
 .quit
 exit
 
-scp root@45.77.114.128:downloads_export.csv downloads.csv
+scp root@XX.XX.XXX.XXX:downloads_export.csv downloads.csv
 ```
 
 ### Step 2: Linux Command Line Cleaning
@@ -348,7 +348,7 @@ Decomposition showing: 87pp naive effect = 87pp confounding + 0pp true effect. V
 
 ---
 
-## 📚 References
+## References
 
 ### Software
 - Python 3.12
