@@ -16,7 +16,7 @@ This project investigates whether very high Week 1 activity **causes** users to 
 
 **Research Question:** Does very high Week 1 activity cause users to become Power Users?
 
-**Key Finding:** The massive +87 percentage point naive effect completely disappears after controlling for confounders. The entire effect is spurious—Week 1 activity is a symptom of underlying engagement, not a cause of Power User status.
+**Key Finding:** The massive +87 percentage point naive effect completely disappears after controlling for confounders. The entire effect is spurious; Week 1 activity is a symptom of underlying engagement, not a cause of Power User status.
 
 **Business Implication:** Don't use Week 1 download counts alone to predict Power Users. Always control for overall engagement patterns or risk chasing false signals.
 
@@ -29,7 +29,7 @@ This project investigates whether very high Week 1 activity **causes** users to 
 | **Naive** | +87.3 pp | High Week 1 users appear much more likely to be Power Users |
 | **Regression-Adjusted** | -0.00 pp | Effect disappears after controlling for confounders |
 | **Causal Forest** | -21.2 pp | Confirms no positive causal effect |
-| **Confounding Bias** | 87.3 pp | 100% of naive effect is spurious! |
+| **Confounding Bias** | 87.3 pp | ~100% of naive effect is spurious! |
 
 ---
 
@@ -37,7 +37,7 @@ This project investigates whether very high Week 1 activity **causes** users to 
 
 ### Data Collection Pipeline
 
-This analysis uses data from a Content Management System (CMS) platform in the gaming sector, comprising 731 users with complete behavioral and revenue data.
+This analysis uses data from a Content Management System (CMS) platform in the gaming sector, comprising 31,000+ users with 731 paying subscribers complete behavioral and revenue data.
 
 #### Figure 1: Download Authentication & Data Logging
 
@@ -63,7 +63,7 @@ Revenue data collected through payment gateway:
 
 1. **Purchase Flow:** User initiates subscription purchase → Shopify/Appstle payment gateway
 2. **Email Linking Challenge:** Users may checkout with different email than Memberstack account
-3. **Solution:** Webflow JavaScript captures Memberstack email during checkout and stores in Shopify "order notes" field
+3. **Solution:** Custom JavaScript program captures Memberstack email during checkout and stores in Shopify "order notes" field
 4. **Data Export:** Payment records exported with order notes, enabling payment-to-behavior linking
 
 **Critical Link:** `subscriptions.csv (order notes) → memberstack.csv (email) → downloads.csv (username)`
@@ -84,7 +84,7 @@ Revenue data collected through payment gateway:
 
 3. **memberstack.csv**
    - User account information
-   - Fields: email address, username, plan_id, date_created
+   - Fields: email address, username, date_created
    - Source: Memberstack API export
    - Purpose: Links subscription email → download username
 
@@ -309,52 +309,6 @@ matplotlib-inline==0.2.1
 ```
 
 Install with: `pip3 install -r requirements.txt`
-
----
-
-## Visualizations
-
-### Figure 1: Naive vs Adjusted Comparison
-Shows how the +87pp naive effect drops to 0pp after controlling for confounders. The stark difference illustrates the severity of confounding.
-
-### Figure 2: CATE Distribution
-Histogram of individual treatment effects ranging from -100pp to 0pp. High variance reflects complex confounding patterns, not true treatment heterogeneity.
-
-### Figure 3: Power User Rates by Group
-Bar chart comparing 100% vs 12.7% Power User rates (the naive comparison that looks so compelling but is completely misleading).
-
-### Figure 4: Confounding Breakdown
-Decomposition showing: 87pp naive effect = 87pp confounding + 0pp true effect. Visual proof that 100% of the observed association is spurious.
-
----
-
-## Limitations
-
-### Data Limitations
-- **Observational data:** Treatment not randomized
-- **Selection bias:** Only includes active paying users (71% of original sample)
-- **Small treated group:** n=71 (top 10% of 731)
-- **Perfect separation:** 100% vs 12.7% outcome rates make estimation challenging
-
-### Causal Assumptions
-- **Unconfoundedness:** Assumes all important confounders measured (may have missed some)
-- **Overlap:** Limited overlap due to extreme outcome separation in treated group
-- **SUTVA:** Assumes no interference between users (reasonable for download behavior)
-
-### Statistical
-- Causal forest shows negative ATE while regression shows zero (both agree: no positive effect)
-- High CATE variance may reflect confounding artifacts rather than true heterogeneity
-- Would benefit from larger sample for more precise estimates
-
----
-
-## References
-
-### Software
-- Python 3.12
-- scikit-learn (Pedregosa et al., 2011)
-- pandas (McKinney, 2010)
-- matplotlib & seaborn (Hunter, 2007; Waskom, 2021)
 
 ---
 
