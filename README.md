@@ -16,9 +16,9 @@ This project investigates whether very high Week 1 activity **causes** users to 
 
 **Research Question:** Does very high Week 1 activity cause users to become Power Users?
 
-**Key Finding:** The massive +87 percentage point naive effect completely disappears after controlling for confounders. The entire effect is spurious; Week 1 activity is a symptom of underlying engagement, not a cause of Power User status.
+**Key Finding:** Week 1 activity shows a **counterintuitive pattern**. Users with excessive early downloads (>33 in Week 1) convert at only 14.1%, versus 21.5% for everyone else - a -7.4pp naive difference. However, after rigorous causal analysis using regression and causal forests, the true effect is **unclear**: regression suggests -9.0pp while causal forests show +7.1pp with massive heterogeneity (±65pp). The disagreement indicates the effect is likely near zero with high individual variation.
 
-**Business Implication:** Don't use Week 1 download counts alone to predict Power Users. Always control for overall engagement patterns or risk chasing false signals.
+**Business Implication:** Week 1 download volume alone is a poor predictor of Power User status. The relationship is complex and varies dramatically between individuals. Focus on overall engagement patterns and behavioral consistency rather than early activity spikes.
 
 ---
 
@@ -26,10 +26,10 @@ This project investigates whether very high Week 1 activity **causes** users to 
 
 | Comparison | Effect Size | Interpretation |
 |------------|-------------|----------------|
-| **Naive** | +87.3 pp | High Week 1 users appear much more likely to be Power Users |
-| **Regression-Adjusted** | -0.00 pp | Effect disappears after controlling for confounders |
-| **Causal Forest** | -21.2 pp | Confirms no positive causal effect |
-| **Confounding Bias** | 87.3 pp | ~100% of naive effect is spurious! |
+| **Naive** | -7.4 pp | Raw difference without controls |
+| **Regression-Adjusted** | -9.0 pp | After controlling for confounders |
+| **Causal Forest** | +7.1 pp | ML method with high variance (±65pp) |
+| **Confounding Bias** | 1.6 pp | Minimal - but methods disagree on sign |
 
 ---
 
@@ -153,7 +153,7 @@ Merges subscription revenue with behavioral data:
 1. **Extract Memberstack email** from order notes using regex: `r'email:([^|]+)'`
 2. **Aggregate revenue** per user (sum across all subscriptions/upgrades)
 3. **Link datasets:** subscriptions → memberstack → downloads
-4. **Define outcome:** Power User = top 20% by revenue ($80+ threshold)
+4. **Define outcome:** Power User = top 20% by revenue ($105+ threshold)
 
 **Output:** `causal_forest_data_corrected.csv` - Final analysis dataset (731 users, 22 columns)
 
@@ -169,8 +169,9 @@ Merges subscription revenue with behavioral data:
 - Control: 660 users (90.3%)
 
 **Outcome:** Power User status (binary)
-- Power User = 1: Top 20% by lifetime revenue ($80+)
+- Power User = 1: Top 20% by lifetime revenue ($105+)
 - Standard User = 0: Bottom 80%
+- Sample: 152 Power Users, 579 Standard Users
 
 **Control Variables:** 11 behavioral features (excluding Week 1 measures to avoid post-treatment bias)
 
@@ -184,13 +185,19 @@ Merges subscription revenue with behavioral data:
 - Compare naive vs adjusted estimates
 
 **Results:**
-- Naive ATE: +87.27 pp
-- Regression AME: -0.00 pp
-- **Confounding: 87.27 pp (100% of naive effect is spurious!)**
+- Naive ATE: -7.43 pp
+- Regression AME: -9.02 pp
+- **Confounding: 1.59 pp (minimal confounding; negative effect is real)**
 
 ### Method 2: Causal Forests
 
-**Purpose:** Estimate heterogeneous treatment effects (who benefits from high Week 1 activity?)
+**Purpose:** Estimate heterogeneous treatment effects using machine learning
+
+**Results:**
+- Average Treatment Effect (ATE): +7.12 pp
+- CATE range: -75.4pp to +54.3pp
+- High heterogeneity across users
+- Disagreement with regression suggests effect near zero on average
 
 **Approach:**
 - Train separate random forests for treated and control groups
@@ -249,49 +256,27 @@ week1-power-user-analysis/
 - Python 3.11+
 - pip package manager
 
-### Quick Start (Using Make)
-
-```bash
-# Clone repository
-git clone https://github.com/yourusername/week1-power-user-analysis.git
-cd week1-power-user-analysis
-
-# Install dependencies
-pip3 install -r requirements.txt
-
-# Run entire pipeline
-make
-
-# Clean outputs
-make clean
-```
-
-### Manual Reproduction
-
-If you prefer to run scripts individually:
+### Quick Start - Run Full Analysis
 
 ```bash
 # 1. Install dependencies
 pip3 install -r requirements.txt
 
-# 2. Process download data
-python3 scripts/data_processing.py
-
-# 3. Process subscription/revenue data
-python3 scripts/subscriptions_processing.py
-
-# 4. Run main analysis
-python3 scripts/final_analysis_week1.py
+# 2. Run main analysis (generates all figures and results)
+python3 final_analysis_week1.py
 ```
 
-**Expected outputs:**
-- `results/week1_predictions.csv` - Individual treatment effect estimates
-- `results/fig1_naive_vs_adjusted.png` - Main finding
-- `results/fig2_cate_distribution.png` - Heterogeneity visualization
-- `results/fig3_power_user_rates.png` - Naive comparison
-- `results/fig4_confounding_breakdown.png` - Confounding breakdown
+**This single script generates:**
+- `week1_predictions.csv` - Individual treatment effect estimates (CATE for each user)
+- `fig1_naive_vs_adjusted.png` - Comparison of naive vs adjusted effect sizes
+- `fig2_cate_distribution.png` - Distribution of individual treatment effects
+- `fig3_power_user_rates.png` - Naive comparison (14.1% vs 21.5%)
+- `fig4_confounding_breakdown.png` - Confounding decomposition
+- `fig5_week1_vs_cate.png` - Scatter plot showing treatment heterogeneity
 
-**Expected runtime:** ~2 minutes on standard laptop
+**Expected runtime:** ~30 seconds on standard laptop
+
+**Note:** The data files (`causal_forest_data_corrected.csv`) must be present in the same directory. This file contains pre-processed user-level features and is generated from raw data using `data_processing.py` and `subscriptions_processing.py` (see Repository Structure below).
 
 ---
 
@@ -309,6 +294,99 @@ matplotlib-inline==0.2.1
 ```
 
 Install with: `pip3 install -r requirements.txt`
+
+---
+
+## Data Dictionary
+
+Complete variable definitions for `causal_forest_data_corrected.csv` (user-level dataset):
+
+### Identifier
+
+| Variable | Description | Type | Example |
+|----------|-------------|------|---------|
+| `username` | Unique user identifier (anonymized) | String | "user_12345" |
+
+### Outcome Variable
+
+| Variable | Description | Type | Range | Definition |
+|----------|-------------|------|-------|------------|
+| `Power_User` | High-value customer flag | Binary | 0, 1 | Top 20% by revenue (≥$105) |
+| `total_revenue` | Lifetime subscription revenue | Float | $25-$500 | Total USD paid across all subscriptions |
+
+### Treatment Variable
+
+| Variable | Description | Type | Range | Definition |
+|----------|-------------|------|-------|------------|
+| `Treatment_HighWeek1` | Extreme early download activity | Binary | 0, 1 | Top 10% by Week 1 downloads (>33) |
+
+### Engagement Features
+
+| Variable | Description | Type | Range | Notes |
+|----------|-------------|------|-------|-------|
+| `Total_Downloads_AllTime` | Total downloads in 30-day window | Integer | 5-455 | All downloads within first 30 days |
+| `Total_Downloads_Week1` | Downloads in first 7 days | Integer | 1-455 | Early engagement indicator |
+| `Downloads_Per_Day` | Average daily download rate | Float | 0.17-15.17 | Total downloads / 30 |
+| `Active_Days` | Days with ≥1 download | Integer | 1-30 | Measure of consistency |
+
+### Game Focus Features
+
+| Variable | Description | Type | Range | Notes |
+|----------|-------------|------|-------|-------|
+| `Unique_Games_Downloaded` | Number of different games | Integer | 1-12 | Diversity indicator |
+| `Game_Diversity_Score` | Herfindahl diversity index | Float | 0-1 | 1 - Σ(share²); higher = more diverse |
+| `Favourite_Game` | Most-downloaded game | String | COD, Fortnite, etc. | Categorical (not used in models) |
+| `Favourite_Game_Downloads` | Downloads for top game | Integer | 3-350 | Absolute count |
+| `Favourite_Game_Ratio` | % downloads for top game | Float | 0.2-1.0 | Focus vs exploration metric |
+
+### Temporal Features
+
+| Variable | Description | Type | Range | Notes |
+|----------|-------------|------|-------|-------|
+| `Days_Since_Last_Download` | Days since last activity | Integer | 0-30 | Recency measure |
+| `Download_Streak_Max` | Longest consecutive active days | Integer | 1-28 | Engagement consistency |
+
+### Category Features
+
+| Variable | Description | Type | Range | Notes |
+|----------|-------------|------|-------|-------|
+| `Genre_Count` | Number of game genres | Integer | 1-12 | Same as Unique_Games (simplified) |
+| `Category_COD_Downloads` | Call of Duty downloads | Integer | 0-200 | Game-specific engagement |
+| `Category_Fortnite_Downloads` | Fortnite downloads | Integer | 0-150 | Game-specific engagement |
+
+### Behavioral Features
+
+| Variable | Description | Type | Range | Notes |
+|----------|-------------|------|-------|-------|
+| `Weekend_Downloads_Pct` | % downloads on Sat/Sun | Float | 0-1 | Weekend vs weekday preference |
+| `Early_Adopter_Flag` | Downloaded in first 3 days | Binary | 0, 1 | Early engagement indicator |
+| `Paid_Downloads_Count` | Premium content downloads | Integer | 0-300 | Willingness to access paid features |
+| `Free_Downloads_Count` | Free content downloads | Integer | 0-200 | Free tier engagement |
+| `Paid_Download_Ratio` | % downloads that are paid | Float | 0-1 | Premium engagement ratio |
+
+### Derived Analysis Variables
+
+| Variable | Description | Type | Range | Formula |
+|----------|-------------|------|-------|---------|
+| `Focused` | Above-median game focus | Binary | 0, 1 | `Favourite_Game_Ratio > median` |
+| `CATE_Week1` | Individual treatment effect | Float | -75.43 to +54.32 | From causal forest model |
+
+### Key Thresholds
+
+| Metric | Threshold | Percentile | Description |
+|--------|-----------|------------|-------------|
+| **Power User** | $105+ revenue | 80th | Top 20% by revenue |
+| **High Week 1** | >33 downloads | 90th | Top 10% by Week 1 activity |
+| **Focused User** | >0.64 favorite ratio | 50th | Above-median game focus |
+
+### Sample Statistics (n=731)
+
+| Variable | Mean | Median | Min | Max | Std Dev |
+|----------|------|--------|-----|-----|---------|
+| `total_revenue` | $72.35 | $50.00 | $25 | $500 | $67.45 |
+| `Total_Downloads_AllTime` | 24.9 | 12 | 5 | 455 | 41.2 |
+| `Total_Downloads_Week1` | 12.1 | 10 | 1 | 455 | 21.3 |
+| `Favourite_Game_Ratio` | 0.64 | 0.67 | 0.20 | 1.0 | 0.24 |
 
 ---
 
