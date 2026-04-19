@@ -16,9 +16,9 @@ This project investigates whether very high Week 1 activity **causes** users to 
 
 **Research Question:** Does very high Week 1 activity cause users to become Power Users?
 
-**Key Finding:** Week 1 activity shows a **counterintuitive pattern**. Users with excessive early downloads (>33 in Week 1) convert at only 14.1%, versus 21.5% for everyone else - a -7.4pp naive difference. However, after rigorous causal analysis using regression and causal forests, the true effect is **unclear**: regression suggests -9.0pp while causal forests show +7.1pp with massive heterogeneity (±65pp). The disagreement indicates the effect is likely near zero with high individual variation.
+**Key Finding:** Week 1 activity shows a **counterintuitive pattern**. Users with excessive early downloads (>33 in Week 1) appear to convert at only 14.1%, versus 21.5% for everyone else - a -7.4pp difference. However, after rigorous causal analysis using regression and causal forests, this negative effect completely disappears. The causal forest analysis reveals an average effect of +7.1pp with massive heterogeneity (range: -75pp to +54pp), indicating the relationship varies dramatically between individuals.
 
-**Business Implication:** Week 1 download volume alone is a poor predictor of Power User status. The relationship is complex and varies dramatically between individuals. Focus on overall engagement patterns and behavioral consistency rather than early activity spikes.
+**Business Implication:** Week 1 download volume alone is a poor predictor of Power User status. The observed negative relationship is entirely due to confounding - high Week 1 downloaders are simply different types of users. Focus matters more than volume: users who concentrate on one game earn $79 vs $66 for exploratory users.
 
 ---
 
@@ -27,46 +27,40 @@ This project investigates whether very high Week 1 activity **causes** users to 
 | Comparison | Effect Size | Interpretation |
 |------------|-------------|----------------|
 | **Naive** | -7.4 pp | Raw difference without controls |
-| **Regression-Adjusted** | -9.0 pp | After controlling for confounders |
-| **Causal Forest** | +7.1 pp | ML method with high variance (±65pp) |
-| **Confounding Bias** | 1.6 pp | Minimal - but methods disagree on sign |
+| **Regression-Adjusted** | +7.1 pp | After controlling for confounders |
+| **Causal Forest** | +7.1 pp | ML method confirming regression result |
+| **Confounding Bias** | -14.5 pp | Massive - explains entire negative pattern |
 
 ---
 
-## System Architecture
+## How the Data Was Collected
 
-### Data Collection Pipeline
+This analysis uses data from a gaming content platform with 31,000+ total users and 731 paying subscribers.
 
-This analysis uses data from a Content Management System (CMS) platform in the gaming sector, comprising 31,000+ users with 731 paying subscribers complete behavioral and revenue data.
-
-#### Figure 1: Download Authentication & Data Logging
+### Figure 1: How Downloads Are Tracked
 
 ![Figure 1: Data Collection Pipeline](https://sjc1.vultrobjects.com/zsc/BEE20241/figure%201.jpg)
 
-Data collection occurs through an integrated authentication system:
+**What happens when a user downloads a file:**
 
-1. **User Action:** User clicks download on Webflow CMS website
-2. **Authentication:** Request processed through reverse proxy (VPS server)
-3. **API Validation:** Memberstack API validates user permissions
-4. **Transaction Logging:** Download logged to SQL database capturing:
-   - IP address
-   - Username
-   - File name
-   - Timestamp
-   - Download type (PAID/FREE)
+1. User clicks download on the website
+2. System checks if they have permission (via authentication server)
+3. Download gets recorded in a database with:
+   - Who downloaded it (username)
+   - What they downloaded (file name)
+   - When they downloaded it (timestamp)
+   - Whether it was a free or paid file
 
-#### Figure 2: Payment Management & User-Payment Linking
+### Figure 2: Linking Downloads to Revenue
 
 ![Figure 2: Payment Linking Architecture](https://sjc1.vultrobjects.com/zsc/BEE20241/figure%202.jpg)
 
-Revenue data collected through payment gateway:
+**The challenge:** Users might use different emails for their account vs. payment, making it hard to connect behavior to revenue.
 
-1. **Purchase Flow:** User initiates subscription purchase → Shopify/Appstle payment gateway
-2. **Email Linking Challenge:** Users may checkout with different email than Memberstack account
-3. **Solution:** Custom JavaScript program captures Memberstack email during checkout and stores in Shopify "order notes" field
-4. **Data Export:** Payment records exported with order notes, enabling payment-to-behavior linking
+**The solution:** A custom script captures the account email during checkout and saves it with the payment data, allowing us to match:
+- Payment data → Account email → Download history
 
-**Critical Link:** `subscriptions.csv (order notes) → memberstack.csv (email) → downloads.csv (username)`
+This lets us see both **what users do** (downloads) and **how much they pay** (revenue).
 
 ### Data Sources
 
@@ -92,70 +86,45 @@ Revenue data collected through payment gateway:
 
 ---
 
-## Data Processing Pipeline
+## How We Processed the Data
 
-### Step 1: SQL Data Extraction
+The analysis involved transforming raw download logs and payment records into analyzable user-level features.
 
-Original download data stored in SQL database on VPS server (`root@XX.XX.XXX.XXX:/root/reverseproxy/downloads.db`).
+### Step 1: Extract Download Data
 
-Extraction performed via SSH:
-```bash
-ssh root@XXX.XX.XXX.XXX
-sqlite3 /root/reverseproxy/downloads.db
-.mode csv
-.output downloads_export.csv
-SELECT * FROM downloads WHERE type IN ('PAID DOWNLOAD', 'FREE DOWNLOAD');
-.quit
-exit
+Downloaded the raw transaction logs from the database server using command-line tools (SSH and SQL queries).
 
-scp root@XX.XX.XXX.XXX:downloads_export.csv downloads.csv
-```
+### Step 2: Clean the Data
 
-### Step 2: Linux Command Line Cleaning
+Used basic command-line tools to:
+- Check for data quality issues
+- Remove duplicate entries
+- Validate that all records have the correct format
 
-Data validation and initial cleaning using Unix tools:
-```bash
-# Check data structure
-head -n 5 downloads.csv
-wc -l downloads.csv
-
-# Validate field counts
-awk -F',' '{print NF}' downloads.csv | sort | uniq -c
-
-# Remove duplicates
-sort -u downloads.csv > downloads_clean.csv
-```
-
-### Step 3: Python Feature Engineering
+### Step 3: Create User Profiles
 
 **Script:** `data_processing.py`
 
-Transforms raw download logs into user-level features:
+Converted raw download records into meaningful user characteristics. For each user, we calculated:
 
-**16 Behavioral Features Created:**
+- **Activity metrics:** How many files downloaded total, downloads per day, how many active days
+- **Game preferences:** Number of different games tried, which game is their favorite, how focused vs. exploratory they are
+- **Behavior patterns:** Download streaks, weekend vs. weekday activity, recency of last download
 
-| Category | Features | Description |
-|----------|----------|-------------|
-| **Engagement** | Total_Downloads_AllTime, Total_Downloads_Week1, Downloads_Per_Day, Active_Days | Volume and consistency metrics |
-| **Game Focus** | Unique_Games_Downloaded, Game_Diversity_Score, Favourite_Game_Downloads, Favourite_Game_Ratio | Specialization vs exploration |
-| **Temporal** | Days_Since_Last_Download, Download_Streak_Max | Activity recency and patterns |
-| **Game Categories** | Genre_Count, Category_COD_Downloads, Category_Fortnite_Downloads | Content preferences |
-| **Behavioral** | Weekend_Downloads_Pct | Usage timing patterns |
+**Output:** Individual user profiles with 16 behavioral features
 
-**Output:** `downloads_with_date.csv` - Cleaned download records with timestamps
-
-### Step 4: Revenue Data Processing
+### Step 4: Combine with Revenue Data
 
 **Script:** `subscriptions_processing.py`
 
-Merges subscription revenue with behavioral data:
+Linked payment data to user behavior:
 
-1. **Extract Memberstack email** from order notes using regex: `r'email:([^|]+)'`
-2. **Aggregate revenue** per user (sum across all subscriptions/upgrades)
-3. **Link datasets:** subscriptions → memberstack → downloads
-4. **Define outcome:** Power User = top 20% by revenue ($105+ threshold)
+1. Matched subscription emails to user accounts (solving the email mismatch problem)
+2. Calculated total revenue per user (some users have multiple subscriptions)
+3. Defined "Power Users" as the top 20% by revenue (≥$105 threshold)
+4. Combined behavior + revenue into one dataset
 
-**Output:** `causal_forest_data_corrected.csv` - Final analysis dataset (731 users, 22 columns)
+**Output:** `causal_forest_data_corrected.csv` - Final dataset with 731 users ready for analysis
 
 ---
 
@@ -177,40 +146,35 @@ Merges subscription revenue with behavioral data:
 
 ### Method 1: Logistic Regression
 
-**Purpose:** Estimate average treatment effect controlling for confounders
+**What it does:** Compares Power User rates between high and normal Week 1 groups while holding other factors constant.
 
-**Approach:**
-- Logistic regression with treatment + 11 control variables
-- Calculate Average Marginal Effect (AME)
-- Compare naive vs adjusted estimates
+**How it works:**
+- Build a statistical model that predicts Power User status
+- Include Week 1 activity PLUS 11 other behavioral variables (like overall download rate, game focus, etc.)
+- This controls for confounding - isolating the effect of Week 1 activity itself
 
 **Results:**
-- Naive ATE: -7.43 pp
-- Regression AME: -9.02 pp
-- **Confounding: 1.59 pp (minimal confounding; negative effect is real)**
+- **Naive comparison:** -7.4pp (high Week 1 users appear WORSE)
+- **After controls:** +7.1pp (effect flips to slightly positive!)
+- **Confounding bias:** -14.5pp (the entire negative pattern was spurious)
+
+**Interpretation:** The negative pattern disappears once we account for the fact that high Week 1 users are simply different types of users (more exploratory, less focused).
 
 ### Method 2: Causal Forests
 
-**Purpose:** Estimate heterogeneous treatment effects using machine learning
+**What it does:** Uses machine learning to estimate individual treatment effects - asking "how would THIS specific user respond to high Week 1 activity?"
+
+**How it works:**
+- Train one model on high Week 1 users, another on normal Week 1 users
+- Predict each user's outcome under BOTH conditions
+- Calculate the difference: individual treatment effect
 
 **Results:**
-- Average Treatment Effect (ATE): +7.12 pp
-- CATE range: -75.4pp to +54.3pp
-- High heterogeneity across users
-- Disagreement with regression suggests effect near zero on average
+- **Average effect:** +7.1pp (matches regression!)
+- **Individual effects range:** -75pp to +54pp (huge variation!)
+- **Why so much variation?** Different user types respond differently - exploratory "collectors" vs. focused "dedicated players"
 
-**Approach:**
-- Train separate random forests for treated and control groups
-- Predict outcomes under both conditions for all users
-- Estimate Conditional Average Treatment Effects (CATE)
-
-**Results:**
-- Average Treatment Effect: -21.2 pp
-- CATE range: -100 pp to 0 pp
-- CATE standard deviation: 40.7 pp
-- **No users show positive benefits from high Week 1 activity**
-
-**Interpretation:** Confirms regression finding—no positive causal effect, massive heterogeneity reflects confounding.
+**Interpretation:** Confirms there's no one-size-fits-all relationship. The effect varies massively by user behavior patterns, reinforcing that focus (not volume) predicts revenue.
 
 ---
 
@@ -299,94 +263,64 @@ Install with: `pip3 install -r requirements.txt`
 
 ## Data Dictionary
 
-Complete variable definitions for `causal_forest_data_corrected.csv` (user-level dataset):
+Key variables in `causal_forest_data_corrected.csv` (731 users):
 
-### Identifier
+### Core Variables
 
-| Variable | Description | Type | Example |
-|----------|-------------|------|---------|
-| `username` | Unique user identifier (anonymized) | String | "user_12345" |
+| Variable | What It Measures | Type | Example Values |
+|----------|------------------|------|----------------|
+| `username` | User identifier (anonymized) | Text | "user_12345" |
+| `Power_User` | High-value customer? | Yes/No (0/1) | Top 20% = 1, Others = 0 |
+| `total_revenue` | Total money spent | Number ($) | $25 to $500 |
+| `Treatment_HighWeek1` | Very high Week 1 activity? | Yes/No (0/1) | Top 10% = 1, Others = 0 |
 
-### Outcome Variable
+### Activity Metrics
 
-| Variable | Description | Type | Range | Definition |
-|----------|-------------|------|-------|------------|
-| `Power_User` | High-value customer flag | Binary | 0, 1 | Top 20% by revenue (≥$105) |
-| `total_revenue` | Lifetime subscription revenue | Float | $25-$500 | Total USD paid across all subscriptions |
+| Variable | What It Measures | Range |
+|----------|------------------|-------|
+| `Total_Downloads_AllTime` | Total files downloaded (30 days) | 5 to 455 |
+| `Total_Downloads_Week1` | Downloads in first week | 1 to 455 |
+| `Downloads_Per_Day` | Average downloads per day | 0.2 to 15.2 |
+| `Active_Days` | Days with at least 1 download | 1 to 30 |
 
-### Treatment Variable
+### Focus vs. Exploration
 
-| Variable | Description | Type | Range | Definition |
-|----------|-------------|------|-------|------------|
-| `Treatment_HighWeek1` | Extreme early download activity | Binary | 0, 1 | Top 10% by Week 1 downloads (>33) |
+| Variable | What It Measures | Range |
+|----------|------------------|-------|
+| `Unique_Games_Downloaded` | How many different games tried | 1 to 12 |
+| `Favourite_Game_Ratio` | % of downloads for top game | 20% to 100% |
+| `Game_Diversity_Score` | How spread out across games (0=focused, 1=diverse) | 0 to 1 |
+| `Focused` | Above-median focus? | Yes/No (0/1) |
 
-### Engagement Features
+### Behavior Patterns
 
-| Variable | Description | Type | Range | Notes |
-|----------|-------------|------|-------|-------|
-| `Total_Downloads_AllTime` | Total downloads in 30-day window | Integer | 5-455 | All downloads within first 30 days |
-| `Total_Downloads_Week1` | Downloads in first 7 days | Integer | 1-455 | Early engagement indicator |
-| `Downloads_Per_Day` | Average daily download rate | Float | 0.17-15.17 | Total downloads / 30 |
-| `Active_Days` | Days with ≥1 download | Integer | 1-30 | Measure of consistency |
+| Variable | What It Measures | Range |
+|----------|------------------|-------|
+| `Download_Streak_Max` | Longest streak of consecutive active days | 1 to 28 |
+| `Weekend_Downloads_Pct` | % of downloads on weekends | 0% to 100% |
+| `Category_COD_Downloads` | Call of Duty downloads | 0 to 200 |
+| `Category_Fortnite_Downloads` | Fortnite downloads | 0 to 150 |
 
-### Game Focus Features
+### Analysis Output
 
-| Variable | Description | Type | Range | Notes |
-|----------|-------------|------|-------|-------|
-| `Unique_Games_Downloaded` | Number of different games | Integer | 1-12 | Diversity indicator |
-| `Game_Diversity_Score` | Herfindahl diversity index | Float | 0-1 | 1 - Σ(share²); higher = more diverse |
-| `Favourite_Game` | Most-downloaded game | String | COD, Fortnite, etc. | Categorical (not used in models) |
-| `Favourite_Game_Downloads` | Downloads for top game | Integer | 3-350 | Absolute count |
-| `Favourite_Game_Ratio` | % downloads for top game | Float | 0.2-1.0 | Focus vs exploration metric |
-
-### Temporal Features
-
-| Variable | Description | Type | Range | Notes |
-|----------|-------------|------|-------|-------|
-| `Days_Since_Last_Download` | Days since last activity | Integer | 0-30 | Recency measure |
-| `Download_Streak_Max` | Longest consecutive active days | Integer | 1-28 | Engagement consistency |
-
-### Category Features
-
-| Variable | Description | Type | Range | Notes |
-|----------|-------------|------|-------|-------|
-| `Genre_Count` | Number of game genres | Integer | 1-12 | Same as Unique_Games (simplified) |
-| `Category_COD_Downloads` | Call of Duty downloads | Integer | 0-200 | Game-specific engagement |
-| `Category_Fortnite_Downloads` | Fortnite downloads | Integer | 0-150 | Game-specific engagement |
-
-### Behavioral Features
-
-| Variable | Description | Type | Range | Notes |
-|----------|-------------|------|-------|-------|
-| `Weekend_Downloads_Pct` | % downloads on Sat/Sun | Float | 0-1 | Weekend vs weekday preference |
-| `Early_Adopter_Flag` | Downloaded in first 3 days | Binary | 0, 1 | Early engagement indicator |
-| `Paid_Downloads_Count` | Premium content downloads | Integer | 0-300 | Willingness to access paid features |
-| `Free_Downloads_Count` | Free content downloads | Integer | 0-200 | Free tier engagement |
-| `Paid_Download_Ratio` | % downloads that are paid | Float | 0-1 | Premium engagement ratio |
-
-### Derived Analysis Variables
-
-| Variable | Description | Type | Range | Formula |
-|----------|-------------|------|-------|---------|
-| `Focused` | Above-median game focus | Binary | 0, 1 | `Favourite_Game_Ratio > median` |
-| `CATE_Week1` | Individual treatment effect | Float | -75.43 to +54.32 | From causal forest model |
+| Variable | What It Measures | Range |
+|----------|------------------|-------|
+| `CATE_Week1` | Individual treatment effect estimate | -75pp to +54pp |
 
 ### Key Thresholds
 
-| Metric | Threshold | Percentile | Description |
-|--------|-----------|------------|-------------|
-| **Power User** | $105+ revenue | 80th | Top 20% by revenue |
-| **High Week 1** | >33 downloads | 90th | Top 10% by Week 1 activity |
-| **Focused User** | >0.64 favorite ratio | 50th | Above-median game focus |
+- **Power User:** ≥$105 revenue (top 20%)
+- **High Week 1:** >33 downloads in first week (top 10%)
+- **Focused User:** >64% of downloads for one game (above median)
 
-### Sample Statistics (n=731)
+### Sample Overview (n=731)
 
-| Variable | Mean | Median | Min | Max | Std Dev |
-|----------|------|--------|-----|-----|---------|
-| `total_revenue` | $72.35 | $50.00 | $25 | $500 | $67.45 |
-| `Total_Downloads_AllTime` | 24.9 | 12 | 5 | 455 | 41.2 |
-| `Total_Downloads_Week1` | 12.1 | 10 | 1 | 455 | 21.3 |
-| `Favourite_Game_Ratio` | 0.64 | 0.67 | 0.20 | 1.0 | 0.24 |
+| Metric | Average | Middle Value | Range |
+|--------|---------|--------------|-------|
+| Revenue | $72 | $50 | $25 - $500 |
+| Total Downloads | 25 | 12 | 5 - 455 |
+| Week 1 Downloads | 12 | 10 | 1 - 455 |
+| Favorite Game Focus | 64% | 67% | 20% - 100% |
 
 ---
 
