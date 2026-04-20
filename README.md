@@ -150,21 +150,18 @@ project/
 
 ### Quick Start - Automated Pipeline (Recommended)
 
-**Using Makefile (runs complete pipeline automatically):**
+**Single command runs everything:**
 
 ```bash
-# 1. Install dependencies
-pip3 install -r requirements.txt
-
-# 2. Run complete pipeline (cleaning + analysis)
 make
 ```
 
 **The Makefile automatically:**
-1. **Cleans data** - Removes duplicates and incomplete rows from all CSV files
-2. **Runs feature engineering** - `data_processing.py`
-3. **Integrates revenue data** - `subscriptions_processing.py`
-4. **Performs causal analysis** - `final_analysis_week1.py`
+1. **Installs dependencies** - `pip3 install -r requirements.txt`
+2. **Cleans data** - Removes duplicates and incomplete rows from all CSV files
+3. **Runs feature engineering** - `data_processing.py`
+4. **Integrates revenue data** - `subscriptions_processing.py`
+5. **Performs causal analysis** - `final_analysis_week1.py`
 
 **Expected runtime:** ~45 seconds on standard laptop
 
