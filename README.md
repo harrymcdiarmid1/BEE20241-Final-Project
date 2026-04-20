@@ -33,34 +33,40 @@ This project investigates whether very high Week 1 activity **causes** users to 
 
 ---
 
-## How the Data Was Collected
+## System Architecture
 
-This analysis uses data from a gaming content platform with 31,000+ total users and 731 paying subscribers.
+This analysis uses data from a gaming content platform (Webflow CMS + Memberstack authentication) with 31,000+ total users and 731 paying subscribers.
 
-### Figure 1: How Downloads Are Tracked
+### Figure 1: Download Authentication & Transaction Logging
 
 ![Figure 1: Data Collection Pipeline](https://sjc1.vultrobjects.com/zsc/BEE20241/figure%201.jpg)
 
-**What happens when a user downloads a file:**
+**Download tracking flow:**
 
-1. User clicks download on the website
-2. System checks if they have permission (via authentication server)
-3. Download gets recorded in a database with:
-   - Who downloaded it (username)
-   - What they downloaded (file name)
-   - When they downloaded it (timestamp)
-   - Whether it was a free or paid file
+1. **User Action:** User clicks download on Webflow CMS website
+2. **Authentication:** Request routed through reverse proxy server (VPS)
+3. **API Validation:** Memberstack API validates user permissions
+4. **Transaction Logging:** Download transaction logged to SQL database with fields:
+   - `username` - Memberstack user identifier
+   - `script` - Downloaded file name
+   - `timestamp` - UTC timestamp
+   - `type` - PAID_DOWNLOAD or FREE_DOWNLOAD
+   - `ip` - User IP address (for fraud detection)
 
-### Figure 2: Linking Downloads to Revenue
+### Figure 2: Payment-to-Behavior Linking Architecture
 
 ![Figure 2: Payment Linking Architecture](https://sjc1.vultrobjects.com/zsc/BEE20241/figure%202.jpg)
 
-**The challenge:** Users might use different emails for their account vs. payment, making it hard to connect behavior to revenue.
+**Revenue data integration:**
 
-**The solution:** A custom script captures the account email during checkout and saves it with the payment data, allowing us to match:
-- Payment data → Account email → Download history
+1. **Purchase Flow:** User initiates subscription → Shopify/Appstle payment gateway processes transaction
+2. **Email Mismatch Problem:** Users may check out with different email than Memberstack account email
+3. **Solution:** Custom JavaScript captures Memberstack account email during checkout and stores in Shopify `order_notes` field
+4. **Data Export:** Payment records exported from Shopify with order notes intact
 
-This lets us see both **what users do** (downloads) and **how much they pay** (revenue).
+**Critical linking chain:** `subscriptions.csv (order_notes field) → memberstack.csv (email mapping) → downloads.csv (username)`
+
+This architecture enables full behavioral-revenue attribution at the user level.
 
 ### Data Sources
 
@@ -86,45 +92,71 @@ This lets us see both **what users do** (downloads) and **how much they pay** (r
 
 ---
 
-## How We Processed the Data
+## Data Processing Pipeline
 
-The analysis involved transforming raw download logs and payment records into analyzable user-level features.
+The analysis transforms raw transaction logs and payment records into user-level analytical features through a multi-stage pipeline.
 
-### Step 1: Extract Download Data
+### Step 1: SQL Database Extraction
 
-Downloaded the raw transaction logs from the database server using command-line tools (SSH and SQL queries).
+Raw download data extracted from production SQL database (SQLite) on VPS server via SSH:
 
-### Step 2: Clean the Data
+```bash
+ssh root@[SERVER_IP]
+sqlite3 /root/reverseproxy/downloads.db
+.mode csv
+.output downloads_export.csv
+SELECT * FROM downloads WHERE type IN ('PAID DOWNLOAD', 'FREE DOWNLOAD');
+.quit
+```
 
-Used basic command-line tools to:
-- Check for data quality issues
-- Remove duplicate entries
-- Validate that all records have the correct format
+Transfer to local environment:
+```bash
+scp root@[SERVER_IP]:downloads_export.csv downloads.csv
+```
 
-### Step 3: Create User Profiles
+### Step 2: Data Validation & Cleaning (Command Line)
+
+Initial data quality checks using Unix tools:
+
+```bash
+# Inspect structure and row count
+head -n 5 downloads.csv
+wc -l downloads.csv  # Verify ~100,000 records
+
+# Validate field consistency
+awk -F',' '{print NF}' downloads.csv | sort | uniq -c
+
+# Remove duplicate transactions
+sort -u downloads.csv > downloads_clean.csv
+```
+
+### Step 3: Feature Engineering (Python)
 
 **Script:** `data_processing.py`
 
-Converted raw download records into meaningful user characteristics. For each user, we calculated:
+Aggregates transaction-level data into user-level behavioral features:
 
-- **Activity metrics:** How many files downloaded total, downloads per day, how many active days
-- **Game preferences:** Number of different games tried, which game is their favorite, how focused vs. exploratory they are
-- **Behavior patterns:** Download streaks, weekend vs. weekday activity, recency of last download
+**16 features created across 4 categories:**
+- **Engagement:** `Total_Downloads_AllTime`, `Total_Downloads_Week1`, `Downloads_Per_Day`, `Active_Days`
+- **Game Focus:** `Unique_Games_Downloaded`, `Game_Diversity_Score`, `Favourite_Game_Ratio`, `Favourite_Game_Downloads`
+- **Temporal:** `Download_Streak_Max`, `Days_Since_Last_Download`
+- **Category-Specific:** `Category_COD_Downloads`, `Category_Fortnite_Downloads`, `Genre_Count`
+- **Behavioral:** `Weekend_Downloads_Pct`
 
-**Output:** Individual user profiles with 16 behavioral features
+**Output:** `downloads_with_date.csv` - Timestamped transaction records ready for user aggregation
 
-### Step 4: Combine with Revenue Data
+### Step 4: Revenue Integration & Outcome Definition
 
 **Script:** `subscriptions_processing.py`
 
-Linked payment data to user behavior:
+Merges payment data with behavioral features:
 
-1. Matched subscription emails to user accounts (solving the email mismatch problem)
-2. Calculated total revenue per user (some users have multiple subscriptions)
-3. Defined "Power Users" as the top 20% by revenue (≥$105 threshold)
-4. Combined behavior + revenue into one dataset
+1. **Email extraction:** Parse Memberstack email from Shopify `order_notes` field using regex `r'email:([^|]+)'`
+2. **Revenue aggregation:** Sum all subscription payments per user (handles upgrades/renewals)
+3. **Dataset joining:** `subscriptions.csv` → `memberstack.csv` (via email) → `downloads.csv` (via username)
+4. **Outcome variable:** Define `Power_User = 1` if `total_revenue >= $105` (80th percentile threshold)
 
-**Output:** `causal_forest_data_corrected.csv` - Final dataset with 731 users ready for analysis
+**Output:** `causal_forest_data_corrected.csv` - Final analytical dataset (731 users × 22 variables)
 
 ---
 
@@ -144,37 +176,67 @@ Linked payment data to user behavior:
 
 **Control Variables:** 11 behavioral features (excluding Week 1 measures to avoid post-treatment bias)
 
-### Method 1: Logistic Regression
+### Method 1: Logistic Regression with Average Marginal Effects
 
-**What it does:** Compares Power User rates between high and normal Week 1 groups while holding other factors constant.
+**Purpose:** Estimate average treatment effect (ATE) controlling for confounding variables
 
-**How it works:**
-- Build a statistical model that predicts Power User status
-- Include Week 1 activity PLUS 11 other behavioral variables (like overall download rate, game focus, etc.)
-- This controls for confounding - isolating the effect of Week 1 activity itself
+**Specification:**
+```
+logit(P(Power_User = 1)) = β₀ + β₁·Treatment_HighWeek1 + Σ βⱼ·Xⱼ
+```
 
-**Results:**
-- **Naive comparison:** -7.4pp (high Week 1 users appear WORSE)
-- **After controls:** +7.1pp (effect flips to slightly positive!)
-- **Confounding bias:** -14.5pp (the entire negative pattern was spurious)
+Where `Xⱼ` includes 11 control variables:
+- `Downloads_Per_Day`, `Active_Days`
+- `Unique_Games_Downloaded`, `Game_Diversity_Score`, `Favourite_Game_Ratio`, `Favourite_Game_Downloads`
+- `Download_Streak_Max`, `Genre_Count`
+- `Category_COD_Downloads`, `Category_Fortnite_Downloads`
+- `Weekend_Downloads_Pct`
 
-**Interpretation:** The negative pattern disappears once we account for the fact that high Week 1 users are simply different types of users (more exploratory, less focused).
+**Note:** Excludes `Total_Downloads_AllTime` to avoid post-treatment bias (it mechanically includes Week 1 downloads).
 
-### Method 2: Causal Forests
-
-**What it does:** Uses machine learning to estimate individual treatment effects - asking "how would THIS specific user respond to high Week 1 activity?"
-
-**How it works:**
-- Train one model on high Week 1 users, another on normal Week 1 users
-- Predict each user's outcome under BOTH conditions
-- Calculate the difference: individual treatment effect
+**Average Marginal Effect (AME) Calculation:**
+```python
+AME = E[P(Y=1|W=1,X) - P(Y=1|W=0,X)]
+```
 
 **Results:**
-- **Average effect:** +7.1pp (matches regression!)
-- **Individual effects range:** -75pp to +54pp (huge variation!)
-- **Why so much variation?** Different user types respond differently - exploratory "collectors" vs. focused "dedicated players"
+- **Naive ATE:** -7.4pp (simple difference in means)
+- **Regression AME:** +7.1pp (after controlling for confounders)
+- **Confounding Bias:** -14.5pp (magnitude of spurious correlation)
 
-**Interpretation:** Confirms there's no one-size-fits-all relationship. The effect varies massively by user behavior patterns, reinforcing that focus (not volume) predicts revenue.
+**Interpretation:** The observed negative association is entirely driven by selection effects. High Week 1 users are systematically different (more exploratory, less focused), and this behavioral pattern—not Week 1 activity itself—predicts lower conversion.
+
+### Method 2: Causal Forests (Heterogeneous Treatment Effects)
+
+**Purpose:** Estimate Conditional Average Treatment Effects (CATE) to explore individual-level heterogeneity
+
+**Approach:**
+1. Split sample by treatment status: `D₁ = {i : Wᵢ = 1}` and `D₀ = {i : Wᵢ = 0}`
+2. Train separate Random Forest classifiers on each subsample:
+   - `RF_treated`: trained on (X, Y) for treated group
+   - `RF_control`: trained on (X, Y) for control group
+3. Generate counterfactual predictions for all users:
+   - `μ₁(Xᵢ) = RF_treated.predict_proba(Xᵢ)`
+   - `μ₀(Xᵢ) = RF_control.predict_proba(Xᵢ)`
+4. Estimate individual treatment effects: `CATE(Xᵢ) = μ₁(Xᵢ) - μ₀(Xᵢ)`
+
+**Hyperparameters:**
+- `n_estimators=200`, `max_depth=10`, `random_state=42`
+
+**Results:**
+- **Average Treatment Effect (ATE):** +7.1pp (consistent with regression)
+- **CATE Distribution:**
+  - Mean: +7.1pp
+  - Median: +7.0pp
+  - Range: -75.4pp to +54.3pp
+  - Std Dev: 32.7pp
+
+**Heterogeneity Analysis:**
+- 67% of users show positive estimated effects
+- 33% show negative estimated effects
+- Effect variation driven by `Favourite_Game_Ratio` and `Game_Diversity_Score` (exploratory vs. focused behavior)
+
+**Interpretation:** High heterogeneity confirms that the relationship is not uniform across users. Different user archetypes respond differently to early engagement intensity, with game focus being the key moderator.
 
 ---
 
@@ -219,28 +281,59 @@ week1-power-user-analysis/
 
 - Python 3.11+
 - pip package manager
+- make (Unix/Linux/macOS - usually pre-installed)
 
-### Quick Start - Run Full Analysis
+### Quick Start - Automated Pipeline (Recommended)
+
+**Using Makefile (runs complete pipeline automatically):**
 
 ```bash
 # 1. Install dependencies
 pip3 install -r requirements.txt
 
-# 2. Run main analysis (generates all figures and results)
+# 2. Run complete pipeline (cleaning + analysis)
+make
+```
+
+**The Makefile automatically:**
+1. **Cleans data** - Removes duplicates and incomplete rows from all CSV files
+2. **Runs feature engineering** - `data_processing.py`
+3. **Integrates revenue data** - `subscriptions_processing.py`
+4. **Performs causal analysis** - `final_analysis_week1.py`
+
+**Expected runtime:** ~45 seconds on standard laptop
+
+---
+
+### Alternative - Manual Pipeline
+
+**If you prefer to run scripts individually:**
+
+```bash
+# 1. Install dependencies
+pip3 install -r requirements.txt
+
+# 2. Run analysis pipeline manually
+python3 data_processing.py
+python3 subscriptions_processing.py
 python3 final_analysis_week1.py
 ```
 
-**This single script generates:**
+**Note:** Manual approach skips the command-line data cleaning step. The Makefile approach is recommended for full reproducibility.
+
+---
+
+### Generated Output Files
+
+Both approaches generate:
 - `week1_predictions.csv` - Individual treatment effect estimates (CATE for each user)
 - `fig1_naive_vs_adjusted.png` - Comparison of naive vs adjusted effect sizes
 - `fig2_cate_distribution.png` - Distribution of individual treatment effects
 - `fig3_power_user_rates.png` - Naive comparison (14.1% vs 21.5%)
 - `fig4_confounding_breakdown.png` - Confounding decomposition
 - `fig5_week1_vs_cate.png` - Scatter plot showing treatment heterogeneity
-
-**Expected runtime:** ~30 seconds on standard laptop
-
-**Note:** The data files (`causal_forest_data_corrected.csv`) must be present in the same directory. This file contains pre-processed user-level features and is generated from raw data using `data_processing.py` and `subscriptions_processing.py` (see Repository Structure below).
+- `fig6_revenue_focus_comparison.png` - Revenue comparison by user focus
+- `fig2_cate_interactive.html` - Interactive treatment effect distribution
 
 ---
 
@@ -263,64 +356,80 @@ Install with: `pip3 install -r requirements.txt`
 
 ## Data Dictionary
 
-Key variables in `causal_forest_data_corrected.csv` (731 users):
+Variable definitions for `causal_forest_data_corrected.csv` (n=731 users):
 
-### Core Variables
+### Identifier & Outcome Variables
 
-| Variable | What It Measures | Type | Example Values |
-|----------|------------------|------|----------------|
-| `username` | User identifier (anonymized) | Text | "user_12345" |
-| `Power_User` | High-value customer? | Yes/No (0/1) | Top 20% = 1, Others = 0 |
-| `total_revenue` | Total money spent | Number ($) | $25 to $500 |
-| `Treatment_HighWeek1` | Very high Week 1 activity? | Yes/No (0/1) | Top 10% = 1, Others = 0 |
+| Variable | Description | Type | Range/Values | Definition |
+|----------|-------------|------|--------------|------------|
+| `username` | Unique user identifier | String | "user_XXXXX" | Anonymized Memberstack username |
+| `Power_User` | High-value customer indicator | Binary | 0, 1 | `1` if `total_revenue >= $105` (≥80th percentile) |
+| `total_revenue` | Lifetime subscription revenue | Float | $25 - $500 | Sum of all subscription payments (USD) |
 
-### Activity Metrics
+### Treatment Variable
 
-| Variable | What It Measures | Range |
-|----------|------------------|-------|
-| `Total_Downloads_AllTime` | Total files downloaded (30 days) | 5 to 455 |
-| `Total_Downloads_Week1` | Downloads in first week | 1 to 455 |
-| `Downloads_Per_Day` | Average downloads per day | 0.2 to 15.2 |
-| `Active_Days` | Days with at least 1 download | 1 to 30 |
+| Variable | Description | Type | Range/Values | Definition |
+|----------|-------------|------|--------------|------------|
+| `Treatment_HighWeek1` | Very high Week 1 activity indicator | Binary | 0, 1 | `1` if `Total_Downloads_Week1 > 33` (>90th percentile) |
 
-### Focus vs. Exploration
+### Engagement Features
 
-| Variable | What It Measures | Range |
-|----------|------------------|-------|
-| `Unique_Games_Downloaded` | How many different games tried | 1 to 12 |
-| `Favourite_Game_Ratio` | % of downloads for top game | 20% to 100% |
-| `Game_Diversity_Score` | How spread out across games (0=focused, 1=diverse) | 0 to 1 |
-| `Focused` | Above-median focus? | Yes/No (0/1) |
+| Variable | Description | Type | Range | Notes |
+|----------|-------------|------|-------|-------|
+| `Total_Downloads_AllTime` | Total downloads (30-day window) | Integer | 5 - 455 | All PAID + FREE downloads in first 30 days |
+| `Total_Downloads_Week1` | Downloads in first 7 days | Integer | 1 - 455 | Early engagement proxy |
+| `Downloads_Per_Day` | Average daily download rate | Float | 0.17 - 15.17 | `Total_Downloads_AllTime / 30` |
+| `Active_Days` | Days with ≥1 download | Integer | 1 - 30 | Consistency metric (0-30 scale) |
 
-### Behavior Patterns
+### Game Focus Features
 
-| Variable | What It Measures | Range |
-|----------|------------------|-------|
-| `Download_Streak_Max` | Longest streak of consecutive active days | 1 to 28 |
-| `Weekend_Downloads_Pct` | % of downloads on weekends | 0% to 100% |
-| `Category_COD_Downloads` | Call of Duty downloads | 0 to 200 |
-| `Category_Fortnite_Downloads` | Fortnite downloads | 0 to 150 |
+| Variable | Description | Type | Range | Notes |
+|----------|-------------|------|-------|-------|
+| `Unique_Games_Downloaded` | Count of distinct games | Integer | 1 - 12 | Exploration metric |
+| `Game_Diversity_Score` | Herfindahl concentration index | Float | 0.0 - 1.0 | `1 - Σ(share²)`; 0=focused, 1=diverse |
+| `Favourite_Game` | Most frequently downloaded game | String | COD, Fortnite, ... | Categorical (not used in models) |
+| `Favourite_Game_Downloads` | Downloads for top game | Integer | 3 - 350 | Absolute count for favorite |
+| `Favourite_Game_Ratio` | Share of downloads for top game | Float | 0.2 - 1.0 | Key moderator: focus vs. exploration |
 
-### Analysis Output
+### Temporal Features
 
-| Variable | What It Measures | Range |
-|----------|------------------|-------|
-| `CATE_Week1` | Individual treatment effect estimate | -75pp to +54pp |
+| Variable | Description | Type | Range | Notes |
+|----------|-------------|------|-------|-------|
+| `Days_Since_Last_Download` | Recency of last activity | Integer | 0 - 30 | Days since last download (as of data snapshot) |
+| `Download_Streak_Max` | Longest consecutive active days | Integer | 1 - 28 | Maximum run of consecutive days with ≥1 download |
 
-### Key Thresholds
+### Category-Specific Features
 
-- **Power User:** ≥$105 revenue (top 20%)
-- **High Week 1:** >33 downloads in first week (top 10%)
-- **Focused User:** >64% of downloads for one game (above median)
+| Variable | Description | Type | Range | Notes |
+|----------|-------------|------|-------|-------|
+| `Genre_Count` | Number of game categories | Integer | 1 - 12 | Equivalent to `Unique_Games_Downloaded` |
+| `Category_COD_Downloads` | Call of Duty downloads | Integer | 0 - 200 | Game-specific engagement |
+| `Category_Fortnite_Downloads` | Fortnite downloads | Integer | 0 - 150 | Game-specific engagement |
 
-### Sample Overview (n=731)
+### Behavioral Features
 
-| Metric | Average | Middle Value | Range |
-|--------|---------|--------------|-------|
-| Revenue | $72 | $50 | $25 - $500 |
-| Total Downloads | 25 | 12 | 5 - 455 |
-| Week 1 Downloads | 12 | 10 | 1 - 455 |
-| Favorite Game Focus | 64% | 67% | 20% - 100% |
+| Variable | Description | Type | Range | Notes |
+|----------|-------------|------|-------|-------|
+| `Weekend_Downloads_Pct` | Proportion of weekend downloads | Float | 0.0 - 1.0 | Saturday + Sunday downloads / total |
+
+### Derived Variables (Analysis Output)
+
+| Variable | Description | Type | Range | Source |
+|----------|-------------|------|-------|--------|
+| `Focused` | Above-median game focus | Binary | 0, 1 | `1` if `Favourite_Game_Ratio > 0.64` (median) |
+| `CATE_Week1` | Conditional Average Treatment Effect | Float | -75.4 - +54.3 pp | From causal forest estimation (see `final_analysis_week1.py`) |
+
+### Key Thresholds & Sample Statistics
+
+| Metric | Threshold/Mean | Percentile | Description |
+|--------|----------------|------------|-------------|
+| **Power User** | $105+ | 80th | Top 20% by revenue |
+| **High Week 1** | >33 downloads | 90th | Top 10% by Week 1 activity |
+| **Focused User** | >64% favorite ratio | 50th | Above-median game concentration |
+| **Mean Revenue** | $72.35 | - | Average across all 731 users |
+| **Median Revenue** | $50.00 | 50th | Middle value (less skewed than mean) |
+| **Mean Downloads** | 24.9 | - | Average total downloads (30-day window) |
+| **Median Downloads** | 12 | 50th | Highly right-skewed distribution |
 
 ---
 
